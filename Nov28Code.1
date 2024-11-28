@@ -1,0 +1,78 @@
+import cv2
+import numpy as np
+
+# Define the color ranges for detecting M&M colors (in HSV format)
+color_ranges = {
+    'Red': ((0, 120, 70), (10, 255, 255)),
+    'Green': ((35, 100, 100), (85, 255, 255)),
+    'Blue': ((100, 150, 150), (140, 255, 255)),
+    'Yellow': ((20, 100, 100), (35, 255, 255)),
+    'Brown': ((10, 100, 100), (20, 255, 255)),
+}
+
+# Circularity threshold (values close to 1 indicate circular shapes)
+CIRCULARITY_THRESHOLD = 0.8
+
+# Initialize the camera
+cap = cv2.VideoCapture(0)
+
+# Check if the camera is opened
+if not cap.isOpened():
+    print("Error: Could not open camera.")
+    exit()
+
+while True:
+    # Capture frame-by-frame
+    ret, frame = cap.read()
+    if not ret:
+        print("Error: Failed to capture image.")
+        break
+    
+    # Convert the frame to HSV color space
+    hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    # Initialize the count dictionary
+    color_counts = {color: 0 for color in color_ranges}
+
+    # Loop through each color range
+    for color, (lower, upper) in color_ranges.items():
+        # Create a mask for the current color
+        mask = cv2.inRange(hsv_frame, np.array(lower), np.array(upper))
+
+        # Find contours of the detected colors
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Count the number of round M&Ms of the current color
+        for contour in contours:
+            if cv2.contourArea(contour) > 500:  # Filter out small noise
+                # Calculate the perimeter and area of the contour
+                perimeter = cv2.arcLength(contour, True)
+                area = cv2.contourArea(contour)
+
+                # Check if the object is round (circularity close to 1)
+                if perimeter > 0:
+                    circularity = 4 * np.pi * area / (perimeter ** 2)
+                    if circularity > CIRCULARITY_THRESHOLD:
+                        color_counts[color] += 1
+
+                        # Draw the contour and label the color
+                        x, y, w, h = cv2.boundingRect(contour)
+                        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                        cv2.putText(frame, color, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+
+    # Display the counts on the screen
+    y_offset = 30
+    for color, count in color_counts.items():
+        cv2.putText(frame, f'{color}: {count}', (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        y_offset += 30
+
+    # Show the frame with the detected M&Ms and color counts
+    cv2.imshow('M&M Color Counter', frame)
+
+    # Break the loop on pressing 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release the camera and close all OpenCV windows
+cap.release()
+cv2.destroyAllWindows()
