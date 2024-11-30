@@ -1,0 +1,109 @@
+import cv2
+import numpy as np
+
+# Load the image
+img = cv2.imread('/Users/abdelrahmanamin/Downloads/IMG_7873.jpg')
+
+# Convert BGR to HSV
+hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+# Define HSV ranges for each color
+color_ranges = {
+    "blue": ([95, 245, 67], [200, 255, 181]),
+    "yellow": ([20, 150, 50], [40, 255, 255]),
+    "orange": ([4, 106, 87], [12, 255, 210]),
+    "green": ([40, 100, 50], [80, 255, 255]),
+    "brown1": ([0, 0, 0], [50, 255, 85]),
+    "brown2": ([177, 0, 0], [179, 255, 85]),
+    "red1": ([0, 141, 10], [4, 255, 160]),
+    "red2": ([178, 142, 56], [179, 255, 160]),
+}
+
+# Create masks for each color
+masks = {}
+for color, (lower, upper) in color_ranges.items():
+    masks[color] = cv2.inRange(hsv, np.array(lower), np.array(upper))
+
+# Combine red and brown masks
+masks["red"] = cv2.add(masks["red1"], masks["red2"])
+masks["brown"] = cv2.add(masks["brown1"], masks["brown2"])
+
+# Subtract overlaps
+masks["red"] = cv2.subtract(masks["red"], masks["orange"])
+masks["brown"] = cv2.subtract(masks["brown"], masks["red"])
+masks["brown"] = cv2.subtract(masks["brown"], masks["orange"])
+
+# Apply morphological operations to clean masks
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+for color in ["red", "orange", "brown", "blue", "yellow", "green"]:
+    masks[color] = cv2.morphologyEx(masks[color], cv2.MORPH_CLOSE, kernel)
+
+
+# Distance Transform to improve grouping
+for color in ["red", "orange", "brown", "blue", "yellow", "green"]:
+    dist_transform = cv2.distanceTransform(masks[color], cv2.DIST_L2, 5)
+    _, thresholded = cv2.threshold(dist_transform, 0.25 * dist_transform.max(), 100, 0)
+    masks[color] = np.uint8(thresholded)
+
+# Create a combined mask for visualization
+combined_mask = np.zeros_like(img)
+color_map = {
+    "blue": [255, 0, 0],
+    "yellow": [0, 255, 255],
+    "orange": [0, 165, 255],
+    "green": [0, 255, 0],
+    "brown": [42, 42, 165],
+    "red": [0, 0, 255],
+}
+
+# Apply the masks to the combined mask and count the objects
+color_counts = {}
+
+# Circularity threshold
+circularity_threshold = 0.1
+
+for color, bgr in color_map.items():
+    combined_mask[masks[color] > 0] = bgr
+    
+    # Find contours to count detected regions of each color
+    contours, _ = cv2.findContours(masks[color], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    color_counts[color] = 0  # Initialize color count
+
+    # Draw bounding boxes and the count on the original image
+    for contour in contours:
+        if cv2.contourArea(contour) > 500:  # Ignore small contours
+            # Calculate the perimeter and area of the contour
+            perimeter = cv2.arcLength(contour, True)
+            area = cv2.contourArea(contour)
+            
+            # Calculate circularity
+            if perimeter > 0:
+                circularity = (4 * np.pi * area) / (perimeter ** 2)
+            else:
+                circularity = 0
+
+            # Filter by circularity
+            if circularity >= circularity_threshold:
+                color_counts[color] += 1  # Increment the count for valid regions
+
+                # Draw bounding box around the contour
+                x, y, w, h = cv2.boundingRect(contour)
+                cv2.rectangle(img, (x, y), (x + w, y + h), bgr, 2)  # Draw bounding box
+                cv2.putText(img, f'{color}: {color_counts[color]}', (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, bgr, 2)
+
+# Display the original image with bounding boxes and counts
+cv2.imshow('Original Image with Count and Bounding Boxes', img)
+
+# Display the combined mask
+cv2.imshow('Combined Mask', combined_mask)
+
+# Optional: Save the results
+cv2.imwrite('output_masked_image_with_count_and_circularity.jpg', img)
+
+# Print the counts for each color
+for color, count in color_counts.items():
+    print(f"Detected {color}: {count} circular regions")
+
+# Wait for a key press and close windows
+cv2.waitKey(0)
+cv2.destroyAllWindows()
