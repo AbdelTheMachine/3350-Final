@@ -1,0 +1,115 @@
+import cv2
+import numpy as np
+
+# Load the image
+img = cv2.imread('/Users/abdelrahmanamin/Downloads/mm data/5/IMG_7864 2.jpeg')
+
+# Convert the image from BGR (default in OpenCV) to HSV color space
+hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+# Define adjusted HSV ranges for each color to ensure distinct color detection
+color_ranges = {
+    "blue": ([100, 150, 50], [140, 255, 255]),
+    "yellow": ([20, 150, 150], [40, 255, 255]),
+    "orange": ([5, 150, 100], [15, 255, 255]),
+    "green": ([35, 50, 50], [85, 255, 255]),
+    "brown1": ([0, 0, 0], [50, 255, 85]),
+    "brown2": ([0, 50, 50], [10, 255, 255]),
+    "red1": ([0, 150, 50], [10, 255, 255]),
+    "red2": ([170, 150, 50], [180, 255, 255]),
+}
+
+# Create masks for each color using the defined HSV ranges
+masks = {}
+for color, (lower, upper) in color_ranges.items():
+    masks[color] = cv2.inRange(hsv, np.array(lower), np.array(upper))
+
+# Combine red and brown masks to create single masks for red and brown
+masks["red"] = cv2.add(masks["red1"], masks["red2"])
+masks["brown"] = cv2.add(masks["brown1"], masks["brown2"])
+
+# Subtract overlaps (to avoid red/brown overlap)
+masks["red"] = cv2.subtract(masks["red"], masks["orange"])
+masks["brown"] = cv2.subtract(masks["brown"], masks["red"])
+masks["brown"] = cv2.subtract(masks["brown"], masks["orange"])
+
+# Apply morphological operations to clean masks
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))  # Larger kernel for more cleaning
+for color in ["red", "orange", "brown", "blue", "yellow", "green"]:
+    masks[color] = cv2.morphologyEx(masks[color], cv2.MORPH_CLOSE, kernel)
+
+# Perform a Distance Transform to improve grouping of regions in the masks
+for color in ["red", "orange", "brown", "blue", "yellow", "green"]:
+    dist_transform = cv2.distanceTransform(masks[color], cv2.DIST_L2, 5)
+    _, thresholded = cv2.threshold(dist_transform, 0.3 * dist_transform.max(), 255, 0)
+    masks[color] = np.uint8(thresholded)
+
+# Create a combined mask for visualization purposes
+combined_mask = np.zeros_like(img)
+color_map = {
+    "blue": [255, 0, 0],
+    "yellow": [0, 255, 255],
+    "orange": [0, 165, 255],
+    "green": [0, 255, 0],
+    "brown": [42, 42, 165],
+    "red": [0, 0, 255],
+}
+
+# Initialize a dictionary to hold counts for each color
+color_counts = {}
+
+# Define a circularity threshold to filter out non-circular objects
+circularity_threshold = 0.1
+min_contour_area = 1000  # Minimum area to filter out smaller regions
+
+# Iterate through each color and apply the corresponding mask to the combined mask
+for color, bgr in color_map.items():
+    combined_mask[masks[color] > 0] = bgr  # Apply the color mask to the combined mask
+    
+    # Find contours to count detected regions of each color
+    contours, _ = cv2.findContours(masks[color], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    color_counts[color] = 0  # Initialize the count for this color
+    
+    # Apply dilation to fill in incomplete circles
+    dilated_mask = cv2.dilate(masks[color], kernel, iterations=1)  # Dilation to fill in gaps
+    
+    # Find contours again on the dilated mask
+    contours, _ = cv2.findContours(dilated_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Fill in the circles and count them
+    for contour in contours:
+        if cv2.contourArea(contour) > min_contour_area:  # Ignore small contours
+            # Calculate the perimeter and area of the contour
+            perimeter = cv2.arcLength(contour, True)
+            area = cv2.contourArea(contour)
+            
+            # Calculate circularity to filter out non-circular objects
+            if perimeter > 0:
+                circularity = (4 * np.pi * area) / (perimeter ** 2)
+            else:
+                circularity = 0
+            
+            # Filter by circularity
+            if circularity >= circularity_threshold:
+                color_counts[color] += 1  # Increment the count for valid regions
+                
+                # Draw the bounding box around the contour (for visualization)
+                x, y, w, h = cv2.boundingRect(contour)
+                cv2.rectangle(img, (x, y), (x + w, y + h), bgr, 2)  # Draw bounding box
+
+# Display the original image with bounding boxes
+cv2.imshow('Original Image with Bounding Boxes', img)
+
+# Display the combined mask
+cv2.imshow('Combined Mask', combined_mask)
+
+# Optional: Save the results to a file
+cv2.imwrite('output_bounding_boxes_image.jpg', img)
+
+# Print the counts for each color
+for color, count in color_counts.items():
+    print(f"Detected {color}: {count} circular regions")
+
+# Wait for a key press and close windows
+cv2.waitKey(0)
+cv2.destroyAllWindows()
